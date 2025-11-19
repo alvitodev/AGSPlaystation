@@ -471,28 +471,17 @@ namespace AGSBilling
 
         void RefreshStaffGrid()
         {
-            // 1. Init Kolom jika belum ada
             if (gridStaff.Columns.Count == 0)
             {
-                gridStaff.Columns.Add("u", "Unit");
-                gridStaff.Columns.Add("s", "Status");
-                gridStaff.Columns.Add("t", "Waktu");
-                gridStaff.Columns.Add("b", "Tagihan (Rp)");
-                gridStaff.Columns.Add("f", "F&B Status");
+                gridStaff.Columns.Add("u", "Unit"); gridStaff.Columns.Add("s", "Status");
+                gridStaff.Columns.Add("t", "Waktu"); gridStaff.Columns.Add("b", "Tagihan (Rp)"); gridStaff.Columns.Add("f", "F&B Status");
             }
+            if (gridStaff.RowCount != sessions.Count) { gridStaff.RowCount = sessions.Count; }
 
-            // 2. Sinkronkan jumlah baris dengan jumlah sesi
-            if (gridStaff.RowCount != sessions.Count)
-            {
-                gridStaff.RowCount = sessions.Count;
-            }
-
-            // 3. Update isi sel (Update-In-Place) agar tidak flicker
             for (int i = 0; i < sessions.Count; i++)
             {
                 var s = sessions[i];
                 var row = gridStaff.Rows[i];
-
                 string timeStr = "-";
                 if (s.Status != "IDLE")
                 {
@@ -507,7 +496,6 @@ namespace AGSBilling
                 string bill = (s.CurrentRupiah + s.Orders.Sum(o => o.Total)).ToString("N0");
                 string fnbStat = s.Orders.Count(o => !o.Delivered) > 0 ? $"BELUM ({s.Orders.Count(o => !o.Delivered)})" : "OK";
 
-                // Update nilai hanya jika berubah (Optional optimization)
                 if (Convert.ToString(row.Cells[0].Value) != s.UnitName) row.Cells[0].Value = s.UnitName;
                 if (Convert.ToString(row.Cells[1].Value) != s.Status) row.Cells[1].Value = s.Status;
                 if (Convert.ToString(row.Cells[2].Value) != timeStr) row.Cells[2].Value = timeStr;
@@ -615,21 +603,86 @@ namespace AGSBilling
         #region History & Admin
         void InitHistory(TabPage p)
         {
-            var btnPrint = new Button { Text = "Cetak Laporan", Top = 15, Left = 15, Width = 200, Height = 35, BackColor = Color.LightBlue };
+            var btnPrint = new Button { Text = "Cetak Laporan (PDF)", Top = 15, Left = 15, Width = 200, Height = 35, BackColor = Color.LightBlue };
             btnPrint.Click += (s, e) => PrintReport();
             gridHistory = new DataGridView { Top = 60, Left = 10, Width = 950, Height = 550, ReadOnly = true, AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill };
             p.Controls.Add(btnPrint); p.Controls.Add(gridHistory); LoadHistoryGrid();
         }
         void LoadHistoryGrid() => gridHistory.DataSource = DataManager.LoadTransactions().OrderByDescending(x => x.Timestamp).ToList();
+
         void PrintReport()
         {
             PrintDocument pd = new PrintDocument();
+            pd.DefaultPageSettings.Margins = new Margins(40, 40, 40, 40);
+
             pd.PrintPage += (s, ev) => {
-                float y = 40; Font f = new Font("Arial", 10);
-                ev.Graphics.DrawString("LAPORAN TRANSAKSI", new Font("Arial", 14, FontStyle.Bold), Brushes.Black, 250, y); y += 40;
-                foreach (var t in (List<TransactionLog>)gridHistory.DataSource) { ev.Graphics.DrawString($"{t.Timestamp:dd/MM HH:mm} - {t.UnitName} - Rp{t.TotalBill:N0}", f, Brushes.Black, 50, y); y += 20; }
+                Graphics g = ev.Graphics;
+                float y = 40;
+                float pageWidth = ev.PageBounds.Width - 80;
+                float left = 40;
+
+                // Fonts & Pens
+                Font titleFont = new Font("Segoe UI", 18, FontStyle.Bold);
+                Font subTitleFont = new Font("Segoe UI", 12, FontStyle.Regular);
+                Font headFont = new Font("Segoe UI", 10, FontStyle.Bold);
+                Font dataFont = new Font("Segoe UI", 10, FontStyle.Regular);
+                Pen line = new Pen(Color.Black, 1);
+
+                // 1. KOP
+                StringFormat center = new StringFormat { Alignment = StringAlignment.Center };
+                g.DrawString("AGS PLAYSTATION", titleFont, Brushes.Black, new RectangleF(left, y, pageWidth, 30), center); y += 35;
+                g.DrawString("Laporan Transaksi & Pendapatan", subTitleFont, Brushes.Black, new RectangleF(left, y, pageWidth, 25), center); y += 35;
+                g.DrawString($"Dicetak: {DateTime.Now:dd/MM/yyyy HH:mm} | Oleh: {user.Username}", dataFont, Brushes.Gray, left, y); y += 25;
+                g.DrawLine(line, left, y, left + pageWidth, y); y += 10;
+
+                // 2. HEADER TABLE
+                float colT = left, colU = left + 100, colP = left + 230, colN = left + 450, colTot = left + 650;
+                g.DrawString("WAKTU", headFont, Brushes.Black, colT, y);
+                g.DrawString("UNIT", headFont, Brushes.Black, colU, y);
+                g.DrawString("PAKET", headFont, Brushes.Black, colP, y);
+                g.DrawString("NOTES", headFont, Brushes.Black, colN, y);
+                g.DrawString("TOTAL", headFont, Brushes.Black, colTot, y);
+                y += 20;
+                g.DrawLine(line, left, y, left + pageWidth, y); y += 10;
+
+                // 3. ISI
+                var list = gridHistory.DataSource as List<TransactionLog>;
+                double grandTotal = 0;
+                if (list != null)
+                {
+                    foreach (var t in list)
+                    {
+                        if (y > ev.PageBounds.Height - 100) break; // Simple paging stop
+                        g.DrawString(t.Timestamp.ToString("HH:mm"), dataFont, Brushes.Black, colT, y);
+                        g.DrawString(t.UnitName.Length > 15 ? t.UnitName.Substring(0, 15) + ".." : t.UnitName, dataFont, Brushes.Black, colU, y);
+                        g.DrawString(t.PackageName.Length > 25 ? t.PackageName.Substring(0, 25) + ".." : t.PackageName, dataFont, Brushes.Black, colP, y);
+                        g.DrawString(t.Notes.Length > 20 ? t.Notes.Substring(0, 20) + ".." : t.Notes, dataFont, Brushes.Black, colN, y);
+                        g.DrawString($"Rp {t.TotalBill:N0}", dataFont, Brushes.Black, colTot, y);
+                        grandTotal += t.TotalBill;
+                        y += 25;
+                        g.DrawLine(Pens.LightGray, left, y - 5, left + pageWidth, y - 5);
+                    }
+                }
+
+                // 4. FOOTER
+                y += 10;
+                g.DrawLine(new Pen(Color.Black, 2), left, y, left + pageWidth, y); y += 10;
+                g.DrawString($"TOTAL PENDAPATAN: Rp {grandTotal:N0}", new Font("Segoe UI", 14, FontStyle.Bold), Brushes.Black, new RectangleF(left, y, pageWidth, 30), new StringFormat { Alignment = StringAlignment.Far });
+
+                // TTD
+                y += 50;
+                g.DrawString("Petugas,", dataFont, Brushes.Black, left + pageWidth - 150, y);
+                y += 50;
+                g.DrawString($"({user.Username})", dataFont, Brushes.Black, left + pageWidth - 150, y);
             };
-            new PrintDialog { Document = pd }.ShowDialog();
+
+            // FIX: Print() triggered on OK
+            PrintDialog dlg = new PrintDialog();
+            dlg.Document = pd;
+            if (dlg.ShowDialog() == DialogResult.OK)
+            {
+                pd.Print();
+            }
         }
 
         void InitAdmin(TabPage p)
